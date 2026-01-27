@@ -14,25 +14,39 @@ const streamToBuffer = async (stream) => {
 export const handler = async (event) => {
     try {
         const { bucket, key } = typeof event.body === "string" ? JSON.parse(event.body) : event.body
-
-        //download image from S3
+        const fileName = key.split('/').pop()
         const getObj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }))
         const imgBuffer = await streamToBuffer(getObj.Body)
 
-        //validate .png format
-        if (getObj.ContentType !== "image/png") {
+        const reject = async (reason) => {
+            await s3.send(new PutObjectCommand({
+                Bucket: bucket,
+                Key: fileName,
+                Body: imgBuffer,
+                ContentType: "image/png",
+                Metadata: {
+                    reason: reason
+                }
+            }))
             return {
                 statusCode: 400,
-                body: JSON.stringify({ status: 'rejected', reason: "not a .png" })
+                body: JSON.stringify({
+                    status: 'rejected',
+                    reason: reason
+                })
             }
+        }
+
+        //VALIDATION
+
+        //validate .png format
+        if (getObj.ContentType !== "image/png") {
+            reject("not a .png")
         }
         //validate file size
         const size = imgBuffer.length
         if (size < 10_000 || size > 5_000_000) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ status: 'rejected', reason: "file too small/large" })
-            }
+            reject("file too small/large")
         }
         //validate dimensions and aspect ratio
         const metadata = await sharp(imgBuffer).metadata()
@@ -40,15 +54,12 @@ export const handler = async (event) => {
         const height = metadata.height
         const aspect = width / height
         if (Math.abs(aspect - 0.47) > 0.05) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ status: 'rejected', reason: "aspect ratio invalid" })
-            }
+            reject("aspect ratio invalid")
         }
         //TODO
         //are we not checking dimensions too?
 
-        //blur sanity check
+        //validate blur
         const grayscale = await sharp(imgBuffer).greyscale().raw().toBuffer({ resolveWithObject: true })
         const pixels = grayscale.data
         let mean = 0
@@ -62,13 +73,10 @@ export const handler = async (event) => {
         }
         variance /= pixels.length
         if (variance < 500) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ status: 'rejected', reason: "image too blurry" })
-            }
+            reject("image too blurry")
         }
 
-        //OCR: extract ticket number
+        //OCR: validate ticket number
         const roiBuffer = await sharp(imgBuffer)
             .extract({ left: Math.round(width * 0.1), top: Math.round(height * 0.08), width: Math.round(width * 0.6), height: Math.round(height * 0.07) })
             .grayscale()
@@ -84,14 +92,40 @@ export const handler = async (event) => {
             tessedit_pageseg_mode: 7,
         });
 
-        const { data: {text} } = await worker.recognize(roiBuffer)
+        const { data: { text } } = await worker.recognize(roiBuffer)
         await worker.terminate()
         const ticketNumber = text.replace(/\s/g, "");
         if (!ticketNumber) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ status: 'rejected', reason: "ticket number unreadable" })
+            reject("ticket number unreadable")
+        }
+
+        //PROCESSING
+
+        //normalize image size
+        const targetWidth = 1200
+        const targetHeight = Math.round(targetWidth / 0.47)
+        const validatedBuffer = await sharp(imgBuffer).resize(targetWidth, targetHeight).png().toBuffer()
+
+        //upload result
+        const validatedKey = `validated/${fileName}.png`
+        await s3.send(new PutObjectCommand({
+            Bucket: bucket,
+            Key: validatedKey,
+            Body: validatedBuffer,
+            ContentType: "image/png",
+            Metadata: {
+                ticketNumber,
+                originalKey: key
             }
+        }))
+
+        return {
+            statusCode: 200,
+            body: JSON.stringify({
+                status: 'validated',
+                ticketNumber,
+                key: validatedKey
+            })
         }
 
     } catch (err) {

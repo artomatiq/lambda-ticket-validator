@@ -18,7 +18,7 @@ S3Client.prototype.send = async function (command) {
         }
     }
     if (name === "PutObjectCommand") {
-        const outPath = "./output" + path.basename(command.input.Key)
+        const outPath = path.join("./output", path.basename(command.input.Key))
         fs.mkdirSync("./output", {recursive: true})
         fs.writeFileSync(outPath, command.input.Body)
         console.log("Saved output to: ", outPath)

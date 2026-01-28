@@ -4,6 +4,22 @@ import { createWorker } from "tesseract.js"
 
 const s3 = new S3Client({ region: "us-east-1" })
 
+let worker
+let workerInitialized = false
+const initWorker = async () => {
+    if (!workerInitialized) {
+        worker = createWorker()
+        await worker.load()
+        await worker.loadLanguage("eng")
+        await worker.initialize("eng")
+        await worker.setParameters({
+            tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+            tessedit_pageseg_mode: 7,
+        });
+        workerInitialized = true
+    }
+}
+
 const streamToBuffer = async (stream) => {
     const chunks = []
     for await (const chunk of stream) chunks.push(chunk)
@@ -20,18 +36,20 @@ export const handler = async (event) => {
         const reject = async (reason) => {
             await s3.send(new PutObjectCommand({
                 Bucket: bucket,
-                Key: fileName,
+                Key: `rejected/${fileName}`,
                 Body: imgBuffer,
                 ContentType: "image/png",
                 Metadata: {
-                    reason: reason
+                    reason: reason,
+                    imageKey: fileName
                 }
             }))
             return {
                 statusCode: 400,
                 body: JSON.stringify({
                     status: 'rejected',
-                    reason: reason
+                    reason: reason,
+                    imageKey: `rejected/${fileName}.png`
                 })
             }
         }
@@ -40,12 +58,12 @@ export const handler = async (event) => {
 
         //validate .png format
         if (getObj.ContentType !== "image/png") {
-            reject("not a .png")
+            return reject("not a .png")
         }
         //validate file size
         const size = imgBuffer.length
         if (size < 10_000 || size > 5_000_000) {
-            reject("file too small/large")
+            return reject("file too small/large")
         }
         //validate dimensions and aspect ratio
         const metadata = await sharp(imgBuffer).metadata()
@@ -53,7 +71,7 @@ export const handler = async (event) => {
         const height = metadata.height
         const aspect = width / height
         if (Math.abs(aspect - 0.47) > 0.05) {
-            reject("aspect ratio invalid")
+            return reject("aspect ratio invalid")
         }
         //TODO
         //are we not checking dimensions too?
@@ -68,11 +86,11 @@ export const handler = async (event) => {
         mean /= pixels.length
         let variance = 0
         for (let i = 0; i < pixels.length; i++) {
-            varience += (pixels[i] - mean) ** 2
+            variance += (pixels[i] - mean) ** 2
         }
         variance /= pixels.length
         if (variance < 500) {
-            reject("image too blurry")
+            return reject("image too blurry")
         }
 
         //OCR: validate ticket number
@@ -82,20 +100,11 @@ export const handler = async (event) => {
             .threshold(180)
             .toBuffer()
 
-        const worker = createWorker()
-        await worker.load()
-        await worker.loadLanguage("eng")
-        await worker.initialize("eng")
-        await worker.setParameters({
-            tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-            tessedit_pageseg_mode: 7,
-        });
-
+        await initWorker()
         const { data: { text } } = await worker.recognize(roiBuffer)
-        await worker.terminate()
         const ticketNumber = text.replace(/\s/g, "");
         if (!ticketNumber) {
-            reject("ticket number unreadable")
+            return reject("ticket number unreadable")
         }
 
         //PROCESSING
@@ -106,10 +115,9 @@ export const handler = async (event) => {
         const validatedBuffer = await sharp(imgBuffer).resize(targetWidth, targetHeight).png().toBuffer()
 
         //upload result
-        const validatedKey = `validated/${fileName}.png`
         await s3.send(new PutObjectCommand({
             Bucket: bucket,
-            Key: validatedKey,
+            Key: `validated/${fileName}.png`,
             Body: validatedBuffer,
             ContentType: "image/png",
             Metadata: {
@@ -123,7 +131,7 @@ export const handler = async (event) => {
             body: JSON.stringify({
                 status: 'validated',
                 ticketNumber,
-                key: validatedKey
+                imageKey: `validated/${fileName}.png`
             })
         }
 

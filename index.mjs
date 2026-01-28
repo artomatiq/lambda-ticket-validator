@@ -8,7 +8,9 @@ let worker
 let workerInitialized = false
 const initWorker = async () => {
     if (!workerInitialized) {
-        worker = await createWorker()
+        worker = await createWorker("eng", {
+            langPath: "./tessdata"
+        })
         await worker.setParameters({
             tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
             tessedit_pageseg_mode: 7,
@@ -88,11 +90,12 @@ export const handler = async (event) => {
         }
         //OCR: validate ticket number
         const roiBuffer = await sharp(imgBuffer)
-            .extract({ 
-                left: Math.round(width * 0.667), 
-                top: Math.round(height * 0.005), 
-                width: Math.round(width * 0.33), 
-                height: Math.round(height * 0.07) })
+            .extract({
+                left: Math.round(width * 0.667),
+                top: Math.round(height * 0.005),
+                width: Math.round(width * 0.33),
+                height: Math.round(height * 0.07)
+            })
             .grayscale()
             .threshold(180)
             .toBuffer()

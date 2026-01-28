@@ -91,7 +91,11 @@ export const handler = async (event) => {
         }
         //OCR: validate ticket number
         const roiBuffer = await sharp(imgBuffer)
-            .extract({ left: Math.round(width * 0.1), top: Math.round(height * 0.08), width: Math.round(width * 0.6), height: Math.round(height * 0.07) })
+            .extract({ 
+                left: Math.round(width * 0.667), 
+                top: Math.round(height * 0.005), 
+                width: Math.round(width * 0.33), 
+                height: Math.round(height * 0.07) })
             .grayscale()
             .threshold(180)
             .toBuffer()

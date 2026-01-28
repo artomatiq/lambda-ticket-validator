@@ -1,7 +1,11 @@
 import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3"
 import sharp from "sharp"
 import { createWorker } from "tesseract.js"
+import path from "path"
+import { fileURLToPath } from "url"
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 const s3 = new S3Client({ region: "us-east-1" })
 
 let worker
@@ -9,7 +13,8 @@ let workerInitialized = false
 const initWorker = async () => {
     if (!workerInitialized) {
         worker = await createWorker("eng", {
-            langPath: "./tessdata"
+            langPath: __dirname,
+            cachePath: __dirname,
         })
         await worker.setParameters({
             tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",

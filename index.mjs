@@ -57,11 +57,13 @@ export const handler = async (event) => {
         //VALIDATION
 
         //validate .png format
+        console.log('file format: ', getObj.ContentType);
         if (getObj.ContentType !== "image/png") {
             return reject("not a .png")
         }
         //validate file size
         const size = imgBuffer.length
+        console.log('file size: ', size);
         if (size < 10_000 || size > 5_000_000) {
             return reject("file too small/large")
         }
@@ -70,39 +72,33 @@ export const handler = async (event) => {
         const width = metadata.width
         const height = metadata.height
         const aspect = width / height
+        console.log('aspect ratio: ', aspect);
         if (Math.abs(aspect - 0.47) > 0.05) {
             return reject("aspect ratio invalid")
         }
-        //TODO
-        //are we not checking dimensions too?
-
         //validate blur
         const grayscale = await sharp(imgBuffer).greyscale().raw().toBuffer({ resolveWithObject: true })
         const pixels = grayscale.data
         let mean = 0
-        for (let i = 0; i < pixels.length; i++) {
-            mean += pixels[i]
-        }
+        for (let i = 0; i < pixels.length; i++) mean += pixels[i]
         mean /= pixels.length
         let variance = 0
-        for (let i = 0; i < pixels.length; i++) {
-            variance += (pixels[i] - mean) ** 2
-        }
+        for (let i = 0; i < pixels.length; i++) variance += (pixels[i] - mean) ** 2
         variance /= pixels.length
+        console.log('variance: ', variance);
         if (variance < 500) {
             return reject("image too blurry")
         }
-
         //OCR: validate ticket number
         const roiBuffer = await sharp(imgBuffer)
             .extract({ left: Math.round(width * 0.1), top: Math.round(height * 0.08), width: Math.round(width * 0.6), height: Math.round(height * 0.07) })
             .grayscale()
             .threshold(180)
             .toBuffer()
-
         await initWorker()
         const { data: { text } } = await worker.recognize(roiBuffer)
         const ticketNumber = text.replace(/\s/g, "");
+        console.log('ticket number detected: ', ticketNumber);
         if (!ticketNumber) {
             return reject("ticket number unreadable")
         }
@@ -113,6 +109,10 @@ export const handler = async (event) => {
         const targetWidth = 1200
         const targetHeight = Math.round(targetWidth / 0.47)
         const validatedBuffer = await sharp(imgBuffer).resize(targetWidth, targetHeight).png().toBuffer()
+        console.log("Validated image size (KB):", (validatedBuffer.length / 1024).toFixed(2))
+        console.log("Validated image size (MB):", (validatedBuffer.length / 1024 / 1024).toFixed(2))
+
+        //UPLOAD
 
         //upload result
         await s3.send(new PutObjectCommand({
@@ -125,7 +125,6 @@ export const handler = async (event) => {
                 originalKey: key
             }
         }))
-
         return {
             statusCode: 200,
             body: JSON.stringify({
@@ -134,7 +133,6 @@ export const handler = async (event) => {
                 imageKey: `validated/${fileName}.png`
             })
         }
-
     } catch (err) {
         console.error(err)
         return {

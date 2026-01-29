@@ -1,6 +1,0 @@
-output/
-test-images/
-test-local.js
-.git/
-.gitignore
-*.log
